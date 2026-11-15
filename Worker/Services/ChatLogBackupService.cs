@@ -1,52 +1,40 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using Workers.Models;
+using Worker.Models;
 
-namespace Workers.Services;
+namespace Worker.Services;
 
 public interface IChatLogBackupService
 {
     Task BackupAsync();
 }
 
-public sealed class ChatLogBackupService : IChatLogBackupService
+public sealed class ChatLogBackupService(AppSettings settings, ILogger<ChatLogBackupService> logger) : IChatLogBackupService
 {
-    private readonly AppSettings _settings;
-    private readonly ILogger<ChatLogBackupService> _logger;
-    private readonly string _hashIndexPath;
     private readonly object _lock = new();
-
-    public ChatLogBackupService(
-        AppSettings settings,
-        ILogger<ChatLogBackupService> logger)
-    {
-        _settings = settings;
-        _logger = logger;
-        _hashIndexPath = settings.HashIndexPath;
-    }
 
     public async Task BackupAsync()
     {
         try
         {
-            if (!File.Exists(_settings.ChatLogPath))
+            if (!File.Exists(settings.ChatLogPath))
                 return;
 
-            string hash = await ComputeMd5Async(_settings.ChatLogPath);
+            string hash = await ComputeMd5Async(settings.ChatLogPath);
 
             if (IsDuplicate(hash))
             {
-                _logger.LogInformation("Duplicate file detected (hash: {Hash}), skipping backup", hash);
+                logger.LogInformation("Duplicate file detected (hash: {Hash}), skipping backup", hash);
                 return;
             }
 
-            Directory.CreateDirectory(_settings.BackupDirectory);
+            Directory.CreateDirectory(settings.BackupDirectory);
 
             string fileName = $"chatlog_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
 
-            string destination = Path.Combine(_settings.BackupDirectory, fileName);
+            string destination = Path.Combine(settings.BackupDirectory, fileName);
 
-            await using var source = await OpenFileWithRetryAsync(_settings.ChatLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            await using var source = await OpenFileWithRetryAsync(settings.ChatLogPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 
             await using var target = File.Create(destination);
 
@@ -54,11 +42,11 @@ public sealed class ChatLogBackupService : IChatLogBackupService
 
             AddHashEntry(hash, fileName);
 
-            _logger.LogInformation("Backup created: {File}", destination);
+            logger.LogInformation("Backup created: {File}", destination);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Backup failed");
+            logger.LogError(ex, "Backup failed");
         }
     }
 
@@ -95,16 +83,16 @@ public sealed class ChatLogBackupService : IChatLogBackupService
 
     private Dictionary<string, string> LoadHashIndex()
     {
-        if (File.Exists(_hashIndexPath))
+        if (File.Exists(settings.HashIndexPath))
         {
             try
             {
-                string json = File.ReadAllText(_hashIndexPath);
+                string json = File.ReadAllText(settings.HashIndexPath);
                 return JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new Dictionary<string, string>();
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to read hash index, starting fresh");
+                logger.LogWarning(ex, "Failed to read hash index, starting fresh");
             }
         }
 
@@ -116,11 +104,11 @@ public sealed class ChatLogBackupService : IChatLogBackupService
         try
         {
             string json = JsonSerializer.Serialize(index, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_hashIndexPath, json);
+            File.WriteAllText(settings.HashIndexPath, json);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to save hash index");
+            logger.LogError(ex, "Failed to save hash index");
         }
     }
 
